@@ -65,6 +65,7 @@ async def _drain_agent(sess, messages):
                 "tool": d.get("tool"),
                 "command": d.get("command"),
                 "output": d.get("output"),
+                "stream_output": d.get("stream_output"),
                 "exit_code": d.get("exit_code"),
             })
     return full, tool_events

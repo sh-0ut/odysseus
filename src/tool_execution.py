@@ -8,7 +8,6 @@ Extracted from agent_tools.py.
 """
 
 import asyncio
-import collections
 import json
 import logging
 import os
@@ -321,10 +320,6 @@ DEFAULT_PYTHON_TIMEOUT = 60 * 60
 # is still in flight. The frontend cares about "alive" more than
 # "every-byte" — 2s is the sweet spot.
 PROGRESS_INTERVAL_S = 2.0
-# Tail buffer size — we keep the most recent N lines of stdout +
-# stderr so the progress event includes a "what's it doing right now"
-# snippet without dragging the whole output along.
-PROGRESS_TAIL_LINES = 12
 
 
 def get_mcp_manager():
@@ -370,6 +365,53 @@ def _truncate(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
         return text[:limit] + f"\n... (truncated, {len(text)} chars total)"
     return text
 
+
+def _normalize_stream_text(text: str) -> str:
+    lines = []
+    for ln in (text or "").splitlines():
+        s = ln.strip()
+        if s.startswith("! "):
+            s = s[2:].strip()
+        if s:
+            lines.append(s)
+    return "\n".join(lines)
+
+
+def _strip_stderr_dup_from_output(output: str, stream: str) -> str:
+    out = (output or "").rstrip()
+    if not out:
+        return out
+    stream_norm = _normalize_stream_text(stream)
+    marker = "\nSTDERR: "
+    pos = out.find(marker)
+    if pos >= 0:
+        stderr_chunk = out[pos + len(marker):].strip()
+        if stderr_chunk:
+            probe = stderr_chunk[: min(160, len(stderr_chunk))]
+            if stream_norm and (
+                probe in stream_norm
+                or stream_norm.startswith(probe)
+                or stderr_chunk in stream_norm
+            ):
+                return out[:pos].rstrip()
+    if stream_norm:
+        stream_head = stream_norm[: min(160, len(stream_norm))]
+        if stream_head and out.endswith(stream_head[: min(80, len(stream_head))]):
+            return out[: -len(stream_head[: min(80, len(stream_head))])].rstrip()
+    return out
+
+
+def _subprocess_tool_result(stdout: str, stderr: str, rc: Optional[int]) -> Dict:
+    stdout_out = _truncate((stdout or "").rstrip(), MAX_OUTPUT_CHARS)
+    stderr_out = _truncate((stderr or "").rstrip(), MAX_OUTPUT_CHARS)
+    return {
+        "stdout": stdout_out,
+        "stderr": stderr_out,
+        "output": stdout_out or "(no output)",
+        "exit_code": rc or 0,
+    }
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -393,15 +435,17 @@ async def _run_subprocess_streaming(
     started = time.time()
     stdout_full: list[str] = []
     stderr_full: list[str] = []
-    tail = collections.deque(maxlen=PROGRESS_TAIL_LINES)
+    stream_lines: list[str] = []
 
     async def _emit_progress():
         if not progress_cb:
             return
         try:
+            stream_text = _truncate("\n".join(stream_lines), MAX_OUTPUT_CHARS)
             await progress_cb({
                 "elapsed_s": round(time.time() - started, 1),
-                "tail": "\n".join(list(tail)),
+                "stream": stream_text,
+                "tail": stream_text,
             })
         except Exception:
             pass
@@ -416,9 +460,9 @@ async def _run_subprocess_streaming(
             decoded = line.decode("utf-8", errors="replace").rstrip("\n\r")
             full_buf.append(decoded)
             if label == "err":
-                tail.append(f"! {decoded}")
+                stream_lines.append(f"! {decoded}")
             else:
-                tail.append(decoded)
+                stream_lines.append(decoded)
             await _emit_progress()
 
     async def _progress_emitter():
@@ -694,12 +738,7 @@ async def _direct_fallback(
             )
             if timed_out:
                 return {"error": f"bash: timed out after {DEFAULT_BASH_TIMEOUT}s — process killed", "exit_code": 124, "stdout": _truncate(stdout, MAX_OUTPUT_CHARS), "stderr": _truncate(stderr, MAX_OUTPUT_CHARS)}
-            output = stdout.rstrip()
-            err = stderr.rstrip()
-            if err:
-                output = (output + "\nSTDERR: " + err).strip() if output else "STDERR: " + err
-            output = _truncate(output, MAX_OUTPUT_CHARS)
-            return {"output": output or "(no output)", "exit_code": rc or 0}
+            return _subprocess_tool_result(stdout, stderr, rc)
 
         if tool == "python":
             # Run user code in a subprocess so an infinite loop or crash
@@ -731,12 +770,7 @@ async def _direct_fallback(
             )
             if timed_out:
                 return {"error": f"python: timed out after {DEFAULT_PYTHON_TIMEOUT}s — process killed", "exit_code": 124, "stdout": _truncate(stdout, MAX_OUTPUT_CHARS), "stderr": _truncate(stderr, MAX_OUTPUT_CHARS)}
-            output = stdout.rstrip()
-            err = stderr.rstrip()
-            if err:
-                output = (output + "\nSTDERR: " + err).strip() if output else "STDERR: " + err
-            output = _truncate(output, MAX_OUTPUT_CHARS)
-            return {"output": output or "(no output)", "exit_code": rc or 0}
+            return _subprocess_tool_result(stdout, stderr, rc)
 
         if tool == "read_file":
             # Args: plain path on line 1 (back-compat) OR JSON

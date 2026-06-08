@@ -26,6 +26,7 @@ from src.agent_tools import (
     strip_tool_blocks,
     execute_tool_block,
     format_tool_result,
+    _strip_stderr_dup_from_output,
     set_active_document,
     set_active_model,
     function_call_to_tool_block,
@@ -2334,6 +2335,7 @@ async def stream_agent_loop(
             else:
                 cmd_display = block.content.strip()
 
+            _last_tool_stream = ""
             if tool_policy and tool_policy.blocks(block.tool_type):
                 desc = f"{block.tool_type}: BLOCKED"
                 result = {
@@ -2378,6 +2380,7 @@ async def stream_agent_loop(
                     evt = await _progress_q.get()
                     if evt is None:
                         break
+                    _last_tool_stream = evt.get("stream") or evt.get("tail") or _last_tool_stream
                     yield (
                         f'data: {json.dumps({"type": "tool_progress", "tool": block.tool_type, "round": round_num, **evt})}\n\n'
                     )
@@ -2496,8 +2499,13 @@ async def stream_agent_loop(
             elif "error" in result:
                 output_text = result["error"][:2000]
 
+            if _last_tool_stream and output_text:
+                output_text = _strip_stderr_dup_from_output(output_text, _last_tool_stream)
+
             # Emit tool_output (include ui_event data if present)
             tool_output_data = {"type": "tool_output", "tool": block.tool_type, "command": cmd_display, "output": output_text, "exit_code": result.get("exit_code")}
+            if _last_tool_stream:
+                tool_output_data["stream_output"] = _last_tool_stream
             if "ui_event" in result:
                 tool_output_data["ui_event"] = result["ui_event"]
                 for k in ("toggle_name", "state", "mode", "model", "endpoint_url", "theme_name", "colors"):
@@ -2562,6 +2570,8 @@ async def stream_agent_loop(
                 "output": output_text,
                 "exit_code": result.get("exit_code"),
             }
+            if _last_tool_stream:
+                tool_event["stream_output"] = _last_tool_stream
             if result.get("image_url"):
                 for ik in ("image_url", "image_prompt", "image_model", "image_size", "image_quality"):
                     if result.get(ik):

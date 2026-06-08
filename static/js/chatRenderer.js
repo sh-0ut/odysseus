@@ -2053,6 +2053,10 @@ export function addMessage(role, content, modelName, metadata) {
           }
           for (const ev of roundTools) {
             const ok = (ev.exit_code === 0 || ev.exit_code == null);
+            let streamHtml = '';
+            if (ev.stream_output && ev.stream_output.trim()) {
+              streamHtml = `<details class="agent-tool-output agent-tool-stream" open><summary>Live output</summary><pre class="agent-thread-stream">${esc(ev.stream_output)}</pre></details>`;
+            }
             let outHtml = '';
             if (ev.output && ev.output.trim()) {
               outHtml = `<details class="agent-tool-output"><summary>Output</summary><pre>${esc(ev.output)}</pre></details>`;
@@ -2087,7 +2091,7 @@ export function addMessage(role, content, modelName, metadata) {
             node.className = 'agent-thread-node' + (ok ? '' : ' error');
             // Hide the raw JSON command when a diff says it better (same as live).
             const evCmdHtml = (ev.command && !(ev.diff && ev.diff.text)) ? `<pre class="agent-thread-cmd">${esc(ev.command)}</pre>` : '';
-            node.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${ok ? '\u2713' : '\u2717'}</span><span class="agent-thread-tool">${esc(ev.tool)}</span><span class="agent-thread-status">${ok ? 'done' : 'failed'}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${evCmdHtml}${outHtml}${evDiffHtml}</div>`;
+            node.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${ok ? '\u2713' : '\u2717'}</span><span class="agent-thread-tool">${esc(ev.tool)}</span><span class="agent-thread-status">${ok ? 'done' : 'failed'}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${evCmdHtml}${streamHtml}${outHtml}${evDiffHtml}</div>`;
             // Click handling is delegated globally \u2014 see chat.js init.
             threadWrap.appendChild(node);
           }

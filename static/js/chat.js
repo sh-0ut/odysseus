@@ -2089,6 +2089,7 @@ import { createStreamRenderer } from './streamingRenderer.js';
                 // Expand/collapse via delegated click handler (init at module bottom).
                 threadWrap.appendChild(node);
                 currentToolBubble = node;
+                currentToolBubble._streamLog = '';
                 // Animate the wave
                 const waveEl = node.querySelector('.agent-thread-wave');
                 if (waveEl) {
@@ -2122,25 +2123,20 @@ import { createStreamRenderer } from './streamingRenderer.js';
                 uiModule.scrollHistory();
 
               } else if (json.type === 'tool_progress') {
-                // Long-running subprocess (bash, python) is still in
-                // flight — refresh the running tool card with the
-                // elapsed-time + tail of its stdout/stderr so the
-                // user doesn't stare at a blind "Running…" spinner.
                 if (_isBg) continue;
                 if (!currentToolBubble) continue;
-                // The per-second ticker (started in tool_start) owns the
-                // elapsed display; here we just surface the live output tail.
-                const tailStr = (json.tail || '').trim();
-                if (tailStr) {
+                const streamStr = (json.stream || json.tail || '').trim();
+                if (streamStr) {
+                  currentToolBubble._streamLog = streamStr;
+                  currentToolBubble.classList.add('open');
                   let tailEl = currentToolBubble.querySelector('.agent-thread-tail');
                   if (!tailEl) {
                     tailEl = document.createElement('pre');
                     tailEl.className = 'agent-thread-tail';
-                    tailEl.style.cssText = 'margin:4px 0 0;padding:6px 8px;font-size:11px;background:rgba(0,0,0,0.18);border-radius:4px;max-height:140px;overflow:auto;white-space:pre-wrap;opacity:0.85;';
                     const content = currentToolBubble.querySelector('.agent-thread-content');
                     if (content) content.appendChild(tailEl);
                   }
-                  tailEl.textContent = tailStr;
+                  tailEl.textContent = streamStr;
                   tailEl.scrollTop = tailEl.scrollHeight;
                 }
                 uiModule.scrollHistory();
@@ -2160,6 +2156,11 @@ import { createStreamRenderer } from './streamingRenderer.js';
                   }
                   const ok = (json.exit_code === 0 || json.exit_code == null);
                   const cmd = json.command || '';
+                  const streamText = (json.stream_output || currentToolBubble._streamLog || '').trim();
+                  let streamHtml = '';
+                  if (streamText) {
+                    streamHtml = `<details class="agent-tool-output agent-tool-stream" open><summary>Live output</summary><pre class="agent-thread-stream">${esc(streamText)}</pre></details>`;
+                  }
                   let outHtml = '';
                   if (json.output && json.output.trim()) {
                     outHtml = `<details class="agent-tool-output"><summary>Output</summary><pre>${esc(json.output)}</pre></details>`;
@@ -2198,7 +2199,11 @@ import { createStreamRenderer } from './streamingRenderer.js';
                   // bottom of file) so no per-node listener needed.
                   const _wasOpen = currentToolBubble.classList.contains('open');
                   currentToolBubble.className = 'agent-thread-node' + (ok ? '' : ' error') + (_wasOpen ? ' open' : '');
-                  currentToolBubble.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${ok ? '\u2713' : '\u2717'}</span><span class="agent-thread-tool">${esc(json.tool)}</span><span class="agent-thread-status">${ok ? 'done' : 'failed'}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${cmdHtml2}${outHtml}${diffHtml}</div>`;
+                  currentToolBubble.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${ok ? '\u2713' : '\u2717'}</span><span class="agent-thread-tool">${esc(json.tool)}</span><span class="agent-thread-status">${ok ? 'done' : 'failed'}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${cmdHtml2}${streamHtml}${outHtml}${diffHtml}</div>`;
+                  if (streamText) {
+                    currentToolBubble._streamLog = streamText;
+                    currentToolBubble.classList.add('open');
+                  }
                   // Reset so thinking spinner between tools says "Thinking" not the old tool's label
                   _lastToolName = '';
                   uiModule.scrollHistory();
